@@ -56,6 +56,17 @@ const fallbackPosts: InstagramFeedPost[] = [
   },
 ];
 
+function shufflePosts(posts: InstagramFeedPost[]) {
+  const shuffled = [...posts];
+
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const randomIndex = Math.floor(Math.random() * (index + 1));
+    [shuffled[index], shuffled[randomIndex]] = [shuffled[randomIndex], shuffled[index]];
+  }
+
+  return shuffled;
+}
+
 function formatPostDate(timestamp?: string) {
   if (!timestamp) {
     return 'Ver no Instagram';
@@ -99,7 +110,7 @@ function InstagramPostSkeleton() {
 }
 
 export function InstagramFeed() {
-  const [posts, setPosts] = useState<InstagramFeedPost[]>(fallbackPosts);
+  const [posts, setPosts] = useState<InstagramFeedPost[]>(() => shufflePosts(fallbackPosts));
   const [isLoading, setIsLoading] = useState(ENABLE_LIVE_FEED);
   const [isLiveFeed, setIsLiveFeed] = useState(false);
 
@@ -123,7 +134,7 @@ export function InstagramFeed() {
 
         const payload = (await response.json()) as { data?: InstagramFeedPost[] };
         if (payload.data?.length) {
-          setPosts(payload.data);
+          setPosts(shufflePosts(payload.data));
           setIsLiveFeed(true);
         }
       } catch (error) {
@@ -132,6 +143,7 @@ export function InstagramFeed() {
         }
 
         console.error('Erro ao carregar feed do Instagram:', error);
+        setPosts(shufflePosts(fallbackPosts));
         setIsLiveFeed(false);
       } finally {
         if (!controller.signal.aborted) {
