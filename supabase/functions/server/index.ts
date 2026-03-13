@@ -1,7 +1,7 @@
 import { Hono } from "npm:hono";
 import { cors } from "npm:hono/cors";
 import { logger } from "npm:hono/logger";
-import * as kv from "./kv_store.tsx";
+import * as kv from "./kv_store.ts";
 
 type InstagramChildMedia = {
   media_type?: string;
@@ -129,6 +129,8 @@ const INSTAGRAM_CACHE_KEY = "instagram-feed-v1";
 const INSTAGRAM_CACHE_TTL_MS = 15 * 60 * 1000;
 const GOOGLE_PLACE_ID_CACHE_PREFIX = "google-place-id-v1:";
 const DEFAULT_GOOGLE_PLACE_QUERY = "Bostelmann Eventos, Mandirituba - PR";
+const LEGACY_BASE_PATH = "/make-server-411ab965";
+const FUNCTION_BASE_PATH = "/server";
 
 // Enable logger
 app.use('*', logger(console.log));
@@ -145,10 +147,43 @@ app.use(
   }),
 );
 
+app.notFound((c) => {
+  return c.json(
+    {
+      error: "not_found",
+    },
+    404,
+  );
+});
+
+const registerGet = (path: string, handler: Parameters<typeof app.get>[1]) => {
+  app.get(path, handler);
+  app.get(`${LEGACY_BASE_PATH}${path}`, handler);
+  app.get(`${FUNCTION_BASE_PATH}${path}`, handler);
+  app.get(`${FUNCTION_BASE_PATH}${LEGACY_BASE_PATH}${path}`, handler);
+};
+
 // Health check endpoint
-app.get("/make-server-411ab965/health", (c) => {
+registerGet("/health", (c) => {
   return c.json({ status: "ok" });
 });
+
+const safeKvGet = async <T>(key: string): Promise<T | null> => {
+  try {
+    return await kv.get(key) as T | null;
+  } catch (error) {
+    console.warn(`KV get failed for key "${key}":`, error);
+    return null;
+  }
+};
+
+const safeKvSet = async (key: string, value: unknown) => {
+  try {
+    await kv.set(key, value);
+  } catch (error) {
+    console.warn(`KV set failed for key "${key}":`, error);
+  }
+};
 
 const isFeedFresh = (feed?: CachedInstagramFeed | null) => {
   if (!feed?.fetchedAt) {
@@ -290,7 +325,7 @@ const resolveGooglePlaceId = async (apiKey: string, forceRefresh = false): Promi
   const cacheKey = `${GOOGLE_PLACE_ID_CACHE_PREFIX}${normalizeCacheKeyPart(textQuery)}`;
 
   if (!forceRefresh) {
-    const cachedPlaceId = await kv.get(cacheKey) as CachedGooglePlaceId | null;
+    const cachedPlaceId = await safeKvGet<CachedGooglePlaceId>(cacheKey);
 
     if (cachedPlaceId?.placeId) {
       return cachedPlaceId;
@@ -298,7 +333,7 @@ const resolveGooglePlaceId = async (apiKey: string, forceRefresh = false): Promi
   }
 
   const resolvedPlace = await searchGooglePlaceByText(apiKey, textQuery);
-  await kv.set(cacheKey, resolvedPlace);
+  await safeKvSet(cacheKey, resolvedPlace);
 
   return resolvedPlace;
 };
@@ -362,9 +397,9 @@ const fetchGoogleReviews = async (forceRefreshPlaceId = false): Promise<GoogleRe
   };
 };
 
-app.get("/make-server-411ab965/instagram-feed", async (c) => {
+registerGet("/instagram-feed", async (c) => {
   const forceRefresh = c.req.query("refresh") === "1";
-  const cachedFeed = await kv.get(INSTAGRAM_CACHE_KEY) as CachedInstagramFeed | null;
+  const cachedFeed = await safeKvGet<CachedInstagramFeed>(INSTAGRAM_CACHE_KEY);
 
   if (!forceRefresh && isFeedFresh(cachedFeed)) {
     return c.json({
@@ -375,7 +410,7 @@ app.get("/make-server-411ab965/instagram-feed", async (c) => {
 
   try {
     const liveFeed = await fetchInstagramFeed();
-    await kv.set(INSTAGRAM_CACHE_KEY, liveFeed);
+    await safeKvSet(INSTAGRAM_CACHE_KEY, liveFeed);
 
     return c.json({
       ...liveFeed,
@@ -401,7 +436,7 @@ app.get("/make-server-411ab965/instagram-feed", async (c) => {
   }
 });
 
-app.get("/make-server-411ab965/google-reviews", async (c) => {
+registerGet("/google-reviews", async (c) => {
   const forceRefresh = c.req.query("refresh") === "1";
 
   try {
