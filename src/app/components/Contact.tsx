@@ -14,30 +14,91 @@ import {
 } from './ui/select';
 import { FloralCorner, DelicateFlower, FloralDivider } from './DecorativeElements';
 
+const CONTACT_FORM_URL = import.meta.env.VITE_CONTACT_FORM_URL;
+const WHATSAPP_NUMBER = '5541999999999';
+
 export function Contact() {
   const [formData, setFormData] = useState({
     name: '',
+    email: '',
     phone: '',
     eventType: '',
     date: '',
     message: '',
   });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [status, setStatus] = useState<{
+    type: 'success' | 'error' | null;
+    message: string;
+  }>({
+    type: null,
+    message: '',
+  });
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    // Criar mensagem para WhatsApp
-    const message = `Olá! Gostaria de solicitar um orçamento para evento na Chácara Bostelmann em Mandirituba.
+
+    if (!CONTACT_FORM_URL) {
+      setStatus({
+        type: 'error',
+        message: 'O formulário está temporariamente indisponível. Fale conosco pelo WhatsApp abaixo.',
+      });
+      return;
+    }
+
+    setIsSubmitting(true);
+    setStatus({
+      type: null,
+      message: '',
+    });
+
+    try {
+      const response = await fetch(CONTACT_FORM_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(formData),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Contact form request failed with ${response.status}`);
+      }
+
+      setStatus({
+        type: 'success',
+        message: 'Recebemos seu pedido de orçamento e vamos responder em breve por e-mail ou WhatsApp.',
+      });
+
+      setFormData({
+        name: '',
+        email: '',
+        phone: '',
+        eventType: '',
+        date: '',
+        message: '',
+      });
+    } catch (error) {
+      console.error('Erro ao enviar formulário de contato:', error);
+      setStatus({
+        type: 'error',
+        message: 'Não foi possível enviar agora. Tente novamente ou fale conosco pelo WhatsApp.',
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const whatsappMessage = `Olá! Gostaria de solicitar um orçamento para evento na Chácara Bostelmann em Mandirituba.
 
 *Nome:* ${formData.name}
+*E-mail:* ${formData.email}
 *Telefone:* ${formData.phone}
 *Tipo de Evento:* ${formData.eventType}
 *Data Desejada:* ${formData.date}
 *Mensagem:* ${formData.message}`;
 
-    const whatsappUrl = `https://wa.me/5541999999999?text=${encodeURIComponent(message)}`;
-    window.open(whatsappUrl, '_blank');
-  };
+  const whatsappUrl = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(whatsappMessage)}`;
 
   const handleChange = (field: string, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }));
@@ -84,7 +145,7 @@ export function Contact() {
             {/* Contact Methods */}
             <div className="space-y-6">
               <a
-                href="https://wa.me/5541999999999"
+                href={`https://wa.me/${WHATSAPP_NUMBER}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center gap-4 p-4 rounded-lg bg-white hover:shadow-md transition-shadow border border-border group"
@@ -162,6 +223,19 @@ export function Contact() {
                 </div>
 
                 <div>
+                  <Label htmlFor="email">E-mail</Label>
+                  <Input
+                    id="email"
+                    type="email"
+                    required
+                    value={formData.email}
+                    onChange={(e) => handleChange('email', e.target.value)}
+                    placeholder="voce@exemplo.com"
+                    className="mt-2"
+                  />
+                </div>
+
+                <div>
                   <Label htmlFor="phone">WhatsApp</Label>
                   <Input
                     id="phone"
@@ -179,7 +253,6 @@ export function Contact() {
                   <Select
                     value={formData.eventType}
                     onValueChange={(value) => handleChange('eventType', value)}
-                    required
                   >
                     <SelectTrigger className="mt-2">
                       <SelectValue placeholder="Selecione o tipo de evento" />
@@ -195,6 +268,7 @@ export function Contact() {
                       <SelectItem value="outro">Outro</SelectItem>
                     </SelectContent>
                   </Select>
+                  <input type="hidden" name="eventType" value={formData.eventType} required />
                 </div>
 
                 <div>
@@ -225,9 +299,33 @@ export function Contact() {
                   type="submit"
                   className="w-full bg-secondary hover:bg-secondary/90"
                   size="lg"
+                  disabled={isSubmitting}
                 >
                   <Send className="w-5 h-5 mr-2" />
-                  Enviar pelo WhatsApp
+                  {isSubmitting ? 'Enviando...' : 'Enviar Solicitação'}
+                </Button>
+
+                {status.type ? (
+                  <p
+                    className={`text-sm ${
+                      status.type === 'success' ? 'text-green-700' : 'text-red-600'
+                    }`}
+                  >
+                    {status.message}
+                  </p>
+                ) : null}
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  size="lg"
+                  asChild
+                >
+                  <a href={whatsappUrl} target="_blank" rel="noopener noreferrer">
+                    <MessageCircle className="w-5 h-5 mr-2" />
+                    Falar pelo WhatsApp
+                  </a>
                 </Button>
               </div>
             </form>

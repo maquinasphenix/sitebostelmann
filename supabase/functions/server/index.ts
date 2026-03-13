@@ -124,6 +124,15 @@ type GoogleReviewsPayload = {
   reviews: GoogleReviewItem[];
 };
 
+type ContactLeadPayload = {
+  name: string;
+  email: string;
+  phone: string;
+  eventType: string;
+  date: string;
+  message?: string;
+};
+
 const app = new Hono();
 const INSTAGRAM_CACHE_KEY = "instagram-feed-v1";
 const INSTAGRAM_CACHE_TTL_MS = 15 * 60 * 1000;
@@ -161,6 +170,13 @@ const registerGet = (path: string, handler: Parameters<typeof app.get>[1]) => {
   app.get(`${LEGACY_BASE_PATH}${path}`, handler);
   app.get(`${FUNCTION_BASE_PATH}${path}`, handler);
   app.get(`${FUNCTION_BASE_PATH}${LEGACY_BASE_PATH}${path}`, handler);
+};
+
+const registerPost = (path: string, handler: Parameters<typeof app.post>[1]) => {
+  app.post(path, handler);
+  app.post(`${LEGACY_BASE_PATH}${path}`, handler);
+  app.post(`${FUNCTION_BASE_PATH}${path}`, handler);
+  app.post(`${FUNCTION_BASE_PATH}${LEGACY_BASE_PATH}${path}`, handler);
 };
 
 // Health check endpoint
@@ -260,6 +276,123 @@ const getGooglePlacesApiKey = () => {
   }
 
   return apiKey;
+};
+
+const getResendApiKey = () => {
+  const apiKey = Deno.env.get("RESEND_API_KEY");
+
+  if (!apiKey) {
+    throw new Error("RESEND_API_KEY is not configured");
+  }
+
+  return apiKey;
+};
+
+const getContactToEmail = () => {
+  return Deno.env.get("CONTACT_TO_EMAIL")?.trim() || "chacarabostelmann@gmail.com";
+};
+
+const getContactFromEmail = () => {
+  return Deno.env.get("CONTACT_FROM_EMAIL")?.trim() || "onboarding@resend.dev";
+};
+
+const formatEventType = (value: string) => {
+  const labels: Record<string, string> = {
+    casamento: "Casamento",
+    aniversario: "Aniversario",
+    "festa-infantil": "Festa infantil",
+    "15anos": "Festa de 15 anos",
+    bodas: "Bodas",
+    corporativo: "Evento corporativo",
+    confraternizacao: "Confraternizacao",
+    outro: "Outro",
+  };
+
+  return labels[value] ?? value;
+};
+
+const escapeHtml = (value: string) =>
+  value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+
+const isValidEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+
+const parseLeadPayload = (payload: unknown): ContactLeadPayload => {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Invalid request body");
+  }
+
+  const body = payload as Record<string, unknown>;
+  const lead: ContactLeadPayload = {
+    name: String(body.name ?? "").trim(),
+    email: String(body.email ?? "").trim().toLowerCase(),
+    phone: String(body.phone ?? "").trim(),
+    eventType: String(body.eventType ?? "").trim(),
+    date: String(body.date ?? "").trim(),
+    message: String(body.message ?? "").trim(),
+  };
+
+  if (!lead.name || !lead.email || !lead.phone || !lead.eventType || !lead.date) {
+    throw new Error("Missing required lead fields");
+  }
+
+  if (!isValidEmail(lead.email)) {
+    throw new Error("Invalid email");
+  }
+
+  return lead;
+};
+
+const sendLeadEmail = async (lead: ContactLeadPayload) => {
+  const resendApiKey = getResendApiKey();
+  const to = getContactToEmail();
+  const from = getContactFromEmail();
+  const formattedEventType = formatEventType(lead.eventType);
+  const formattedMessage = lead.message ? escapeHtml(lead.message).replaceAll("\n", "<br />") : "Nao informado";
+  const subject = `Novo lead do site: ${lead.name} - ${formattedEventType}`;
+
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${resendApiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      from,
+      to: [to],
+      subject,
+      reply_to: lead.email,
+      text: [
+        "Novo lead recebido pelo site da Chacara Bostelmann.",
+        "",
+        `Nome: ${lead.name}`,
+        `Email: ${lead.email}`,
+        `Telefone: ${lead.phone}`,
+        `Tipo de evento: ${formattedEventType}`,
+        `Data desejada: ${lead.date}`,
+        `Mensagem: ${lead.message || "Nao informado"}`,
+      ].join("\n"),
+      html: `
+        <h1>Novo lead recebido pelo site</h1>
+        <p><strong>Nome:</strong> ${escapeHtml(lead.name)}</p>
+        <p><strong>Email:</strong> ${escapeHtml(lead.email)}</p>
+        <p><strong>Telefone:</strong> ${escapeHtml(lead.phone)}</p>
+        <p><strong>Tipo de evento:</strong> ${escapeHtml(formattedEventType)}</p>
+        <p><strong>Data desejada:</strong> ${escapeHtml(lead.date)}</p>
+        <p><strong>Mensagem:</strong><br />${formattedMessage}</p>
+      `,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Resend request failed with status ${response.status}: ${await response.text()}`);
+  }
+
+  return await response.json();
 };
 
 const normalizeCacheKeyPart = (value: string) =>
@@ -451,6 +584,34 @@ registerGet("/google-reviews", async (c) => {
         error: "google_reviews_unavailable",
       },
       503,
+    );
+  }
+});
+
+registerPost("/contact", async (c) => {
+  try {
+    const payload = await c.req.json();
+    const lead = parseLeadPayload(payload);
+    const result = await sendLeadEmail(lead);
+
+    return c.json({
+      ok: true,
+      id: result.id ?? null,
+    });
+  } catch (error) {
+    console.error("Contact form error:", error);
+
+    const message = error instanceof Error ? error.message : "Unknown error";
+    const status = message === "Invalid request body" || message === "Missing required lead fields" || message === "Invalid email"
+      ? 400
+      : 500;
+
+    return c.json(
+      {
+        ok: false,
+        error: "contact_form_unavailable",
+      },
+      status,
     );
   }
 });
